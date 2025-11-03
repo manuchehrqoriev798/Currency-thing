@@ -1,0 +1,61 @@
+================================================================================
+                  HOW TO RUN - COPY AND PASTE THESE COMMANDS
+================================================================================
+
+STEP 1: Open Terminal
+---------------------
+Press Ctrl+Alt+T (or open Terminal from applications)
+
+
+STEP 2: Go to the project folder
+----------------------------------
+Type this command and press Enter:
+
+cd "/home/manu/Desktop/Currency thing"
+
+
+STEP 3: Install required packages
+----------------------------------
+Type this command and press Enter:
+
+pip3 install -r requirements.txt
+
+(If this doesn't work, try: python3 -m pip install -r requirements.txt)
+
+
+STEP 4: Train the model (MUST DO THIS FIRST!)
+-----------------------------------------------
+Type this command and press Enter:
+
+python3 train_model.py
+
+Wait until you see "Training completed successfully!"
+
+
+STEP 5: Run detection
+---------------------
+Type this command and press Enter:
+
+python3 detect_currency.py
+
+Your camera will open and start detecting currencies!
+
+
+CONTROLS:
+---------
+- Press 'q' to quit
+- Press 's' to save current frame
+- Press SPACE to pause/resume
+
+
+================================================================================
+                    QUICK COPY-PASTE VERSION:
+================================================================================
+
+cd "/home/manu/Desktop/Currency thing"
+pip3 install -r requirements.txt
+python3 train_model.py
+python3 detect_currency.py
+
+================================================================================
+

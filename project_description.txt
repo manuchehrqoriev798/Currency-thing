@@ -1,0 +1,286 @@
+================================================================================
+PROJECT: KYRGYZ SOM CURRENCY DETECTION AND SUMMATION SYSTEM
+COURSE: Digital Image Processing (COMP 3041)
+================================================================================
+
+1. PROJECT OVERVIEW
+================================================================================
+
+This project aims to develop an automated system for detecting and counting 
+Kyrgyz Som (KGS) banknotes and coins from digital images, with the ultimate 
+goal of calculating the total monetary value. The system will process 
+photographs containing multiple currency denominations, identify each 
+currency item, classify its denomination, and sum the total value.
+
+The project aligns with the Digital Image Processing course objectives, 
+particularly focusing on object detection, image segmentation, feature 
+extraction, and classification using machine learning techniques.
+
+================================================================================
+2. PROJECT OBJECTIVES
+================================================================================
+
+Primary Objectives:
+-------------------
+1. Detect Kyrgyz Som currencies (banknotes and coins) in digital images
+2. Classify detected currencies by their denominations
+3. Calculate and display the total sum of all detected currencies
+4. Implement robust detection algorithms that work with varying image 
+   conditions (lighting, angles, backgrounds)
+
+Secondary Objectives:
+---------------------
+1. Preprocess images to enhance currency visibility
+2. Handle multiple currencies in a single image
+3. Provide visual feedback showing detected currencies with bounding boxes
+4. Create a user-friendly interface for image input and result display
+
+================================================================================
+3. TECHNICAL APPROACH
+================================================================================
+
+3.1 Course Topics Applied
+--------------------------
+This project will incorporate multiple concepts from the Digital Image 
+Processing course:
+
+a) Image Enhancement (Weeks 3-4)
+   - Histogram equalization for contrast improvement
+   - Spatial domain operations
+   - Image normalization and preprocessing
+
+b) Image Segmentation (Week 7, 9-10)
+   - Thresholding techniques for separating currency from background
+   - Edge detection (Sobel, Canny) for boundary identification
+   - Region-based segmentation for isolating individual currency items
+   - Watershed segmentation if needed for touching objects
+
+c) Feature Extraction (Week 11)
+   - Extract distinguishing features from each currency denomination
+   - Color, texture, and shape-based features
+   - Size and dimension analysis
+
+d) Object Detection (Week 11)
+   - Implement detection algorithms to locate currency in images
+   - Bounding box generation for detected items
+
+e) Object Recognition/Classification (Week 11-12)
+   - Classify detected objects into specific denominations
+   - Distinguish between different Kyrgyz Som notes and coins
+
+f) Neural Networks and CNN (Week 13-15)
+   - Utilize Convolutional Neural Networks (CNN) for feature learning
+   - Transfer learning from pre-trained models
+   - Consider YOLO (You Only Look Once) for real-time object detection
+   - VGGNet or similar architectures for classification
+
+g) Morphological Operations (Week 15)
+   - Erosion and dilation for noise removal
+   - Shape refinement of detected regions
+
+================================================================================
+4. IMPLEMENTATION STAGES
+================================================================================
+
+Stage 1: Image Preprocessing and Enhancement
+---------------------------------------------
+- Load and preprocess input images
+- Apply histogram equalization for better contrast
+- Convert to appropriate color spaces (RGB, HSV, grayscale as needed)
+- Noise reduction using filtering techniques
+- Image normalization and resizing
+
+Stage 2: Currency Detection
+----------------------------
+- Detect all currency items in the image using:
+  * Pre-built libraries (OpenCV, YOLO, TensorFlow Object Detection API)
+  * Custom edge detection and segmentation methods
+  * Contour detection for currency boundaries
+- Generate bounding boxes around detected currencies
+- Filter false positives using morphological operations and size constraints
+
+Stage 3: Currency Classification
+---------------------------------
+- Extract features from detected currency regions:
+  * Color histograms
+  * Texture features
+  * Dimensions (width, height, area)
+  * Specific visual markers unique to each denomination
+- Classify each detected currency using:
+  * Machine learning classifiers (SVM, Random Forest)
+  * Deep learning models (CNN)
+  * Template matching with reference images
+- Handle both banknotes and coins
+
+Stage 4: Value Calculation and Display
+---------------------------------------
+- Map classified denominations to their monetary values
+- Sum all detected currency values
+- Display results with:
+  * Annotated image showing detected currencies
+  * Denomination labels for each detection
+  * Total sum calculation
+  * Confidence scores for each detection
+
+================================================================================
+5. PYTHON IMPLEMENTATION PLAN
+================================================================================
+
+5.1 Core Libraries
+------------------
+- OpenCV (cv2): Image processing, edge detection, contour analysis
+- NumPy: Numerical operations and array handling
+- Matplotlib: Visualization and result display
+- Scikit-learn: Machine learning classifiers
+- TensorFlow/Keras or PyTorch: Deep learning models for classification
+- PIL/Pillow: Image loading and basic manipulations
+
+5.2 Pre-built Detection Libraries (Optional)
+---------------------------------------------
+- YOLO (You Only Look Once): Real-time object detection
+- TensorFlow Object Detection API: Pre-trained detection models
+- Detectron2: Facebook's detection framework
+- MediaPipe: Google's framework (if available for currency detection)
+
+5.3 Project Structure
+---------------------
+currency_detection/
+├── main.py                 # Main execution script
+├── preprocessing.py        # Image enhancement functions
+├── detection.py            # Currency detection algorithms
+├── classification.py       # Classification models
+├── training/               # Training data and scripts
+│   ├── train_model.py
+│   └── dataset/            # Sample photos provided by users
+├── models/                 # Saved trained models
+├── utils.py                # Helper functions
+├── requirements.txt        # Python dependencies
+└── README.md              # Project documentation
+
+5.4 Key Python Modules/Functions
+---------------------------------
+- Image loading and preprocessing functions
+- Edge detection functions (Sobel, Canny)
+- Contour detection and filtering
+- Feature extraction functions
+- Classification model training and inference
+- Visualization and result display functions
+
+================================================================================
+6. TRAINING AND DATA PREPARATION
+================================================================================
+
+6.1 Dataset Collection
+----------------------
+- Receive sample photos of Kyrgyz Som currencies from project team
+- Organize photos by denomination
+- Create labeled dataset with:
+  * Banknotes: 20, 50, 100, 200, 500, 1000, 5000 som notes
+  * Coins: Various coin denominations
+
+6.2 Data Augmentation
+---------------------
+- Rotate images at various angles
+- Adjust brightness and contrast
+- Apply noise
+- Scale transformations
+- Crop and resize operations
+
+6.3 Model Training
+------------------
+- Split data into training, validation, and testing sets
+- Train CNN or traditional ML classifiers
+- Fine-tune pre-trained models using transfer learning
+- Validate performance and adjust hyperparameters
+- Save trained models for inference
+
+================================================================================
+7. EXPECTED CHALLENGES AND SOLUTIONS
+================================================================================
+
+Challenge 1: Varying Lighting Conditions
+Solution: Apply histogram equalization, adaptive thresholding, and 
+          normalization techniques.
+
+Challenge 2: Overlapping or Touching Currencies
+Solution: Use watershed segmentation, advanced contour analysis, and 
+          morphological operations to separate connected regions.
+
+Challenge 3: Different Viewing Angles
+Solution: Train models with augmented data including rotated and perspective-
+          transformed images.
+
+Challenge 4: Similar-looking Denominations
+Solution: Extract fine-grained features, use deep learning for classification,
+          and implement confidence thresholds.
+
+Challenge 5: Background Complexity
+Solution: Apply segmentation techniques to isolate currency regions from
+          complex backgrounds.
+
+================================================================================
+8. EVALUATION METRICS
+================================================================================
+
+- Detection Accuracy: Percentage of currencies correctly detected
+- Classification Accuracy: Percentage of correctly classified denominations
+- Precision and Recall: For each denomination class
+- Overall System Accuracy: Correct total sum calculation rate
+- Processing Time: Speed of detection and classification
+
+================================================================================
+9. DELIVERABLES
+================================================================================
+
+1. Complete Python implementation with all modules
+2. Trained model(s) for currency detection and classification
+3. User interface or command-line tool for image processing
+4. Documentation including:
+   - Installation instructions
+   - Usage guide
+   - Algorithm descriptions
+5. Test results and evaluation metrics
+6. Sample outputs showing detected currencies with annotations
+
+================================================================================
+10. COURSE LEARNING OUTCOMES ADDRESSED
+================================================================================
+
+This project directly addresses the following course learning outcomes:
+
+✓ Outcome 2: Apply techniques like histogram equalization, contrast 
+              stretching, and filtering for image enhancement.
+✓ Outcome 4: Employ thresholding, edge detection, and feature extraction 
+              for image segmentation and analysis.
+✓ Outcome 6: Evaluate time and space complexity of algorithms and compare 
+              them to select optimal solutions.
+✓ Outcome 7: Apply image processing to various fields like computer vision.
+✓ Outcome 8: Develop problem-solving skills through hands-on projects 
+              and practical exercises.
+
+================================================================================
+11. FUTURE EXTENSIONS
+================================================================================
+
+- Real-time detection using webcam input
+- Mobile application for currency counting
+- Support for multiple currencies (not just Kyrgyz Som)
+- Receipt generation with detected amounts
+- Integration with accounting systems
+- Multi-language support
+
+================================================================================
+12. TIMELINE AND MILESTONES
+================================================================================
+
+Milestone 1: Image preprocessing and enhancement pipeline
+Milestone 2: Basic currency detection implementation
+Milestone 3: Classification system development
+Milestone 4: Model training with provided sample photos
+Milestone 5: Integration and testing
+Milestone 6: Final system with user interface
+
+================================================================================
+END OF PROJECT DESCRIPTION
+================================================================================
+

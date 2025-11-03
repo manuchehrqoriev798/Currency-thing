@@ -1,0 +1,53 @@
+================================================================================
+           EXACT INSTRUCTIONS - HOW TO RUN CURRENCY DETECTION
+================================================================================
+
+STEP 1: OPEN TERMINAL
+=====================
+1. Press Ctrl + Alt + T on your keyboard
+   (OR go to Applications → Terminal)
+
+
+STEP 2: GO TO THE PROJECT FOLDER
+=================================
+2. Copy and paste this EXACT command, then press Enter:
+
+   cd "/home/manu/Desktop/Currency thing"
+
+   (Make sure there are quotes around the path!)
+
+
+STEP 3: RUN THE DETECTION PROGRAM
+==================================
+3. Copy and paste this EXACT command, then press Enter:
+
+   python3 detect_currency.py
+
+   (Wait a few seconds - your camera will open!)
+
+
+STEP 4: USE THE PROGRAM
+========================
+- Point your camera at the currencies
+- The system will detect them automatically
+- You'll see:
+  * Green boxes around detected currencies
+  * Labels showing denomination (20 som, 50 som, etc.)
+  * Total sum at the top left
+
+CONTROLS:
+---------
+- Press 'q' key → Quit and close camera
+- Press 's' key → Save current frame as image
+- Press SPACE bar → Pause/Resume detection
+
+
+================================================================================
+                    COPY-PASTE THESE 2 COMMANDS:
+================================================================================
+
+cd "/home/manu/Desktop/Currency thing"
+python3 detect_currency.py
+
+================================================================================
+

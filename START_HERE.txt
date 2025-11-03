@@ -1,0 +1,99 @@
+================================================================================
+                    🚀 START HERE 🚀
+          Currency Detection System - Quick Start Guide
+================================================================================
+
+📋 TWO SIMPLE STEPS TO GET STARTED:
+====================================
+
+1️⃣  TRAIN (Run this ONCE):
+   ──────────────────────────────────────────────────────────────────
+   python3 train_model.py
+   
+   What it does:
+   • Reads ALL images from currencies/ folders
+   • Trains a machine learning model
+   • Saves model files for detection
+   
+   ⏱️  Takes 1-2 minutes (depending on number of images)
+   
+   ✅ When done, you'll see: "Training completed successfully!"
+
+
+2️⃣  DETECT (Run this whenever you want to detect):
+   ──────────────────────────────────────────────────────────────────
+   python3 detect_currency.py
+   
+   What it does:
+   • Opens your camera
+   • Detects currencies in real-time
+   • Shows total sum
+   
+   🎮 Controls:
+      • Press 'q' to quit
+      • Press 's' to save frame
+      • Press SPACE to pause
+
+
+⚙️ FIRST TIME SETUP:
+====================
+
+Before Step 1, install dependencies:
+
+   pip3 install -r requirements.txt
+
+(Or run: ./install_all.sh)
+
+
+📁 YOUR FOLDER STRUCTURE:
+========================
+
+currencies/
+├── 20/      ← Put 20 som images here
+├── 50/      ← Put 50 som images here  
+├── 100/     ← Put 100 som images here
+├── 500/     ← Put 500 som images here
+├── 1000/    ← Put 1000 som images here
+└── 5000/    ← Put 5000 som images here
+
+✅ You can add MANY images to each folder
+✅ Supported: .jpg, .jpeg, .png, .bmp
+
+
+📝 COMPLETE WORKFLOW:
+====================
+
+1. Install:     pip3 install -r requirements.txt
+2. Add images:  Put images in currencies/ folders
+3. Train:       python3 train_model.py          ← DO THIS FIRST!
+4. Detect:      python3 detect_currency.py      ← THEN DO THIS!
+
+
+❓ TROUBLESHOOTING:
+==================
+
+❌ "Model not found"
+   → Run train_model.py first!
+
+❌ "No module named 'sklearn'"
+   → Run: pip3 install scikit-learn
+
+❌ Camera doesn't open
+   → Close other apps using camera
+
+❌ "No training data found"
+   → Add images to currencies/ folders
+
+
+📚 MORE DETAILS:
+================
+
+• Detailed instructions:  SETUP_INSTRUCTIONS.md
+• Quick reference:       HOW_TO_RUN.txt
+• Project description:    project_description.txt
+
+
+================================================================================
+              THAT'S IT! FOLLOW THE TWO STEPS ABOVE ⬆️
+================================================================================
+
