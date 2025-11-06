@@ -16,6 +16,8 @@ os.environ['QT_QPA_PLATFORM'] = 'xcb'
 # Suppress OpenCV warnings
 os.environ['OPENCV_LOG_LEVEL'] = 'ERROR'
 import cv2
+import threading
+import time
 # Set OpenCV to only show errors (suppress warnings) - if available
 try:
     cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)
@@ -737,12 +739,23 @@ def run_detection():
     print(f"✓ Camera found at index {camera_idx}")
     print()
     
-    # Open camera
-    cap = cv2.VideoCapture(camera_idx)
+    # Open camera with V4L2 backend if available
+    cap = cv2.VideoCapture(camera_idx, cv2.CAP_V4L2)
     if not cap.isOpened():
         print("❌ Error: Could not open camera!")
         return
     
+    # Tune camera properties for low-latency smooth preview
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
+    # Prefer MJPEG to reduce CPU usage
+    try:
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+    except Exception:
+        pass
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)
@@ -761,6 +774,62 @@ def run_detection():
     frame_count = 0
     detections = []
     latest_frame = None
+
+    # Thread-safe latest frame buffer
+    frame_lock = threading.Lock()
+    stop_event = threading.Event()
+
+    def grab_frames():
+        nonlocal latest_frame, frame_count
+        # Clear some initial frames to avoid startup lag
+        for _ in range(10):
+            cap.read()
+        while not stop_event.is_set():
+            ret, frame = cap.read()
+            if not ret:
+                # Avoid tight loop if camera hiccups
+                time.sleep(0.005)
+                continue
+            with frame_lock:
+                latest_frame = frame
+                frame_count += 1
+
+    # Background detection worker
+    detection_lock = threading.Lock()
+    detection_in_progress = False
+
+    def detection_worker():
+        nonlocal detections, detection_in_progress
+        # Run periodically, picking the most recent frame
+        while not stop_event.is_set():
+            if paused:
+                time.sleep(0.05)
+                continue
+            # Sample every ~8 frames (~4-8 fps inference depending on camera fps)
+            with frame_lock:
+                current_frame = None if latest_frame is None else latest_frame.copy()
+                current_count = frame_count
+            if current_frame is None:
+                time.sleep(0.01)
+                continue
+            # Only infer on every 8th frame snapshot
+            if current_count % 8 != 0:
+                time.sleep(0.005)
+                continue
+            if detection_in_progress:
+                time.sleep(0.001)
+                continue
+            detection_in_progress = True
+            try:
+                new_dets = detect_currencies(current_frame, model, mappings)
+                with detection_lock:
+                    detections = new_dets
+            except Exception as e:
+                print(f"Detection error: {e}")
+            finally:
+                detection_in_progress = False
+            # Small sleep to avoid hot loop
+            time.sleep(0.001)
     
     # Color mapping for denominations
     colors = {
@@ -773,45 +842,28 @@ def run_detection():
         '5000': (0, 255, 255)   # Yellow
     }
     
-    # Clear camera buffer to reduce lag
-    for _ in range(5):
-        cap.read()
+    # Start threads
+    grabber_thread = threading.Thread(target=grab_frames, daemon=True)
+    infer_thread = threading.Thread(target=detection_worker, daemon=True)
+    grabber_thread.start()
+    infer_thread.start()
     
     try:
-        detection_in_progress = False
         while True:
-            # Always read frames to keep camera feed fresh
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to read from camera")
-                break
-            
-            # Always update display frame immediately for smooth feed
-            if not paused:
-                latest_frame = frame.copy()
-                frame_count += 1
-                
-                # Detect currencies every 8 frames (balance between smoothness and responsiveness)
-                # Only start new detection if previous one finished
-                if frame_count % 8 == 0 and not detection_in_progress:
-                    detection_in_progress = True
-                    try:
-                        detections = detect_currencies(latest_frame, model, mappings)
-                    except Exception as e:
-                        print(f"Detection error: {e}")
-                        detections = []
-                    finally:
-                        detection_in_progress = False
-            else:
-                # When paused, still update display
-                if latest_frame is None:
-                    latest_frame = frame.copy()
-            
-            # Use latest frame or current frame for display
-            display_frame = latest_frame.copy() if latest_frame is not None else frame.copy()
+            # Pull the most recent frame for display
+            with frame_lock:
+                display_frame = None if latest_frame is None else latest_frame.copy()
+            if display_frame is None:
+                # No frame yet; wait briefly
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+                continue
             detected_count = 0
             
-            for det in detections:
+            # Use latest cached detections from background worker
+            with detection_lock:
+                current_dets = list(detections)
+            for det in current_dets:
                 x, y, w, h = det['box']
                 denom = det['denomination']
                 conf = det['confidence']
@@ -872,11 +924,6 @@ def run_detection():
             
             # Use waitKey with small delay to allow display to update
             key = cv2.waitKey(1) & 0xFF
-            
-            # Clear camera buffer periodically to prevent lag buildup
-            if frame_count % 30 == 0:
-                for _ in range(3):
-                    cap.read()
             if key == ord('q'):
                 break
             elif key == ord('s'):
@@ -890,6 +937,12 @@ def run_detection():
     except KeyboardInterrupt:
         print("\nDetection interrupted by user")
     finally:
+        stop_event.set()
+        try:
+            grabber_thread.join(timeout=0.5)
+            infer_thread.join(timeout=0.5)
+        except Exception:
+            pass
         cap.release()
         cv2.destroyAllWindows()
         print("Camera released")
