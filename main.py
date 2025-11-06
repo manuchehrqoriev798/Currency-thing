@@ -9,9 +9,21 @@ This script:
 """
 
 import os
+import sys
+import warnings
 # Set Qt backend before importing cv2 to avoid plugin issues
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
+# Suppress OpenCV warnings
+os.environ['OPENCV_LOG_LEVEL'] = 'ERROR'
 import cv2
+# Set OpenCV to only show errors (suppress warnings) - if available
+try:
+    cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)
+except AttributeError:
+    # Older OpenCV versions don't have setLogLevel
+    pass
+# Suppress Python warnings
+warnings.filterwarnings('ignore')
 import numpy as np
 from pathlib import Path
 import glob
@@ -29,6 +41,22 @@ from sklearn.metrics import classification_report, confusion_matrix
 
 # Only JPG/JPEG formats
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg'}
+
+
+class SuppressStderr:
+    """Context manager to suppress stderr output."""
+    def __init__(self):
+        self.original_stderr = sys.stderr
+        self.devnull = open(os.devnull, 'w')
+    
+    def __enter__(self):
+        sys.stderr = self.devnull
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stderr = self.original_stderr
+        self.devnull.close()
+        return False
 
 # Currency denominations
 DENOMINATIONS = ['20', '50', '100', '200', '500', '1000', '5000']
@@ -405,25 +433,36 @@ def find_camera(preferred_index=None):
     """Find an available camera, optionally starting from a preferred index."""
     # If preferred index is specified, try it first
     if preferred_index is not None:
-        cap = cv2.VideoCapture(preferred_index)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                cap.release()
-                return preferred_index
-            cap.release()
+        try:
+            # Suppress stderr to avoid OpenCV warnings
+            with SuppressStderr():
+                cap = cv2.VideoCapture(preferred_index)
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        cap.release()
+                        return preferred_index
+                    cap.release()
+        except Exception:
+            pass
     
-    # Otherwise, search all available cameras
+    # Otherwise, search all available cameras (silently)
     available_cameras = []
     print("  Scanning for cameras...")
     for i in range(20):  # Increased range to find phone cameras
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                available_cameras.append(i)
-                print(f"    ✓ Camera found at index {i}")
-            cap.release()
+        try:
+            # Suppress stderr to avoid OpenCV warnings
+            with SuppressStderr():
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        available_cameras.append(i)
+                        print(f"    ✓ Camera found at index {i}")
+                    cap.release()
+        except Exception:
+            # Silently skip cameras that can't be opened
+            pass
     
     if available_cameras:
         # Return the first available camera (or last one if multiple, as phone is usually added last)
@@ -437,20 +476,26 @@ def list_cameras():
     cameras = []
     print("\nScanning for cameras...")
     for i in range(20):
-        cap = cv2.VideoCapture(i)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                # Try to get camera name/info
-                backend = cap.getBackendName()
-                cameras.append({
-                    'index': i,
-                    'backend': backend,
-                    'resolution': (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 
-                                  int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-                })
-                print(f"  Camera {i}: {backend} - Resolution: {cameras[-1]['resolution']}")
-            cap.release()
+        try:
+            # Suppress stderr to avoid OpenCV warnings
+            with SuppressStderr():
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        # Try to get camera name/info
+                        backend = cap.getBackendName()
+                        cameras.append({
+                            'index': i,
+                            'backend': backend,
+                            'resolution': (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 
+                                          int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                        })
+                        print(f"  Camera {i}: {backend} - Resolution: {cameras[-1]['resolution']}")
+                    cap.release()
+        except Exception:
+            # Silently skip cameras that can't be opened
+            pass
     return cameras
 
 
@@ -666,13 +711,19 @@ def run_detection():
     # Find camera
     print("Searching for camera...")
     if camera_idx is None:
-        # List all cameras first
+        # List all cameras first (this will also scan, but we'll reuse the results)
         cameras = list_cameras()
         if len(cameras) > 1:
             print(f"\n  Found {len(cameras)} camera(s). Using the last one (usually your phone).")
             print(f"  To use a specific camera, run: python main.py <camera_index>")
             print(f"  Or set environment variable: export CAMERA_INDEX=<camera_index>")
-        camera_idx = find_camera()
+            # Use the camera we already found from list_cameras
+            camera_idx = cameras[-1]['index'] if len(cameras) > 1 else cameras[0]['index']
+        elif len(cameras) == 1:
+            camera_idx = cameras[0]['index']
+        else:
+            # If list_cameras didn't find any, try find_camera (but it should have found them)
+            camera_idx = find_camera()
     
     if camera_idx is None:
         print("❌ Error: No camera found!")
