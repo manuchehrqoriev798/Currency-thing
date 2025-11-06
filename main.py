@@ -4,7 +4,7 @@ Kyrgyz Som Currency Detection - Main Script
 
 This script:
 1. Removes old trained model files (.pkl)
-2. Trains a new model from images in currencies/ folder
+2. Trains a new deep learning model from images in currencies/ folder
 3. Runs real-time currency detection using camera
 """
 
@@ -13,34 +13,42 @@ import os
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
 import cv2
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-import joblib
 from pathlib import Path
 import glob
+import joblib
 
-# Supported image formats
-IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp'}
+# Deep Learning imports
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers, models, optimizers, callbacks
+from tensorflow.keras.applications import MobileNetV2, EfficientNetB0
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report, confusion_matrix
+
+# Only JPG/JPEG formats
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg'}
 
 # Currency denominations
-DENOMINATIONS = ['20', '50', '100', '500', '1000', '5000']
+DENOMINATIONS = ['20', '50', '100', '200', '500', '1000', '5000']
 
-# Feature extraction parameters
-TARGET_SIZE = (200, 100)  # Width, Height
-HIST_BINS = 32
-HOG_BINS = 8
+# Model parameters
+IMG_SIZE = (224, 224)  # Standard size for transfer learning
+BATCH_SIZE = 32
+EPOCHS = 50  # Heavy training with many epochs
+LEARNING_RATE = 0.0001
 
 # Detection parameters
-TEMPLATE_MATCH_THRESHOLD = 0.6
+MIN_CONFIDENCE = 0.3  # Lower threshold for better detection
 MIN_DETECTION_AREA = 5000
 MAX_DETECTION_AREA = 500000
 NMS_THRESHOLD = 0.3
 
 
 def remove_old_models():
-    """Remove old trained model files."""
-    model_files = ['currency_model.pkl', 'currency_scaler.pkl', 'currency_mappings.pkl']
+    """Remove old trained model files - ALWAYS delete before training."""
+    model_files = ['currency_model.pkl', 'currency_scaler.pkl', 'currency_mappings.pkl', 'currency_model.h5']
     removed = []
     for model_file in model_files:
         if os.path.exists(model_file):
@@ -48,13 +56,15 @@ def remove_old_models():
             removed.append(model_file)
             print(f"  ✓ Removed {model_file}")
     if removed:
-        print(f"\nRemoved {len(removed)} old model file(s)\n")
+        print(f"\nRemoved {len(removed)} old model file(s)")
+        print("  (Old models deleted - will train fresh model)\n")
     else:
-        print("No old model files to remove\n")
+        print("No old model files to remove")
+        print("  (Will train new model)\n")
 
 
 def load_images_from_folder(folder_path):
-    """Load all images from a folder."""
+    """Load only JPG/JPEG images from a folder."""
     images = []
     if not os.path.exists(folder_path):
         return images
@@ -71,104 +81,74 @@ def load_images_from_folder(folder_path):
     return images
 
 
-def extract_features(image):
-    """Extract 112 features from an image."""
-    # Resize to consistent size
-    resized = cv2.resize(image, TARGET_SIZE)
-    
-    features = []
-    
-    # 1. Color histogram features (96 features: 32 bins × 3 channels)
-    b, g, r = cv2.split(resized)
-    hist_b = cv2.calcHist([b], [0], None, [HIST_BINS], [0, 256]).flatten()
-    hist_g = cv2.calcHist([g], [0], None, [HIST_BINS], [0, 256]).flatten()
-    hist_r = cv2.calcHist([r], [0], None, [HIST_BINS], [0, 256]).flatten()
-    features.extend(hist_b)
-    features.extend(hist_g)
-    features.extend(hist_r)
-    
-    # 2. Edge features (2 features: mean and std of Canny edges)
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-    features.append(np.mean(edges))
-    features.append(np.std(edges))
-    
-    # 3. Statistical features (4 features: mean, std, min, max of grayscale)
-    features.append(np.mean(gray))
-    features.append(np.std(gray))
-    features.append(np.min(gray))
-    features.append(np.max(gray))
-    
-    # 4. Shape features (2 features: area, circularity)
-    _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if contours:
-        largest_contour = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(largest_contour)
-        perimeter = cv2.arcLength(largest_contour, True)
-        circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
-        features.append(area / 10000.0)  # Normalized area
-        features.append(circularity)
-    else:
-        features.append(0.0)
-        features.append(0.0)
-    
-    # 5. HOG-like gradient orientation histogram (8 features)
-    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-    magnitude = np.sqrt(gx**2 + gy**2)
-    angle = np.arctan2(gy, gx) * 180 / np.pi
-    angle[angle < 0] += 360
-    
-    hist, _ = np.histogram(angle, bins=HOG_BINS, range=(0, 360), weights=magnitude)
-    hist = hist / (np.sum(hist) + 1e-6)  # Normalize
-    features.extend(hist)
-    
-    return np.array(features, dtype=np.float32)
+def create_heavy_augmentation():
+    """Create heavy data augmentation generator."""
+    return ImageDataGenerator(
+        rotation_range=30,           # Rotate up to 30 degrees
+        width_shift_range=0.2,       # Shift horizontally
+        height_shift_range=0.2,      # Shift vertically
+        shear_range=0.2,             # Shear transformation
+        zoom_range=0.3,               # Zoom in/out
+        horizontal_flip=True,         # Flip horizontally
+        vertical_flip=False,          # Don't flip vertically (currency orientation matters)
+        brightness_range=[0.7, 1.3], # Brightness variation
+        channel_shift_range=50,       # Color channel shifts
+        fill_mode='nearest',
+        rescale=1./255
+    )
 
 
-def augment_data(images, labels):
-    """Augment data by horizontal flipping."""
-    augmented_images = []
-    augmented_labels = []
+def build_model(num_classes):
+    """Build a deep learning model using transfer learning."""
+    # Use EfficientNetB0 as base (more powerful than MobileNetV2)
+    base_model = EfficientNetB0(
+        weights='imagenet',
+        include_top=False,
+        input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3)
+    )
     
-    for img, label in zip(images, labels):
-        augmented_images.append(img)
-        augmented_labels.append(label)
-        flipped = cv2.flip(img, 1)
-        augmented_images.append(flipped)
-        augmented_labels.append(label)
+    # Freeze base model initially
+    base_model.trainable = False
     
-    return augmented_images, augmented_labels
+    # Add custom classification head
+    inputs = keras.Input(shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
+    x = base_model(inputs, training=False)
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dropout(0.3)(x)
+    x = layers.Dense(512, activation='relu')(x)
+    x = layers.Dropout(0.3)(x)
+    x = layers.Dense(256, activation='relu')(x)
+    x = layers.Dropout(0.2)(x)
+    outputs = layers.Dense(num_classes, activation='softmax')(x)
+    
+    model = keras.Model(inputs, outputs)
+    
+    # Compile with learning rate scheduling
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=LEARNING_RATE),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy', keras.metrics.SparseTopKCategoricalAccuracy(k=3, name='top_3_accuracy')]
+    )
+    
+    return model, base_model
 
 
-def train_model():
-    """Train the currency detection model."""
-    print("=" * 70)
-    print("TRAINING CURRENCY DETECTION MODEL")
-    print("=" * 70)
-    print()
-    
-    currencies_dir = "currencies"
-    if not os.path.exists(currencies_dir):
-        print("❌ Error: 'currencies' folder not found!")
-        print("   Please create the folder structure with currency images.")
-        return False
-    
-    print("Loading currency templates from folders...")
+def prepare_data():
+    """Load and prepare all training data."""
+    print("Loading currency images from folders...")
     print()
     
     all_images = []
     all_labels = []
     
     for denom in DENOMINATIONS:
-        folder_path = os.path.join(currencies_dir, denom)
+        folder_path = os.path.join("currencies", denom)
         images = load_images_from_folder(folder_path)
         
         if images:
             all_images.extend(images)
             all_labels.extend([denom] * len(images))
-            print(f"  ✓ Loaded {len(images)} template(s) for {denom} som")
+            print(f"  ✓ Loaded {len(images)} image(s) for {denom} som")
         else:
             print(f"  ⚠ No images found in {folder_path}")
     
@@ -176,151 +156,302 @@ def train_model():
     
     if len(all_images) == 0:
         print("❌ Error: No training images found!")
-        print("   Please add images to the currencies/ folders.")
-        return False
+        print("   Please add JPG images to the currencies/ folders.")
+        return None, None
     
     print(f"Total images loaded: {len(all_images)}")
     print()
     
-    # Data augmentation
-    print("Applying data augmentation (horizontal flip)...")
-    augmented_images, augmented_labels = augment_data(all_images, all_labels)
-    print(f"After augmentation: {len(augmented_images)} images")
+    # Resize all images to model input size
+    print("Resizing images to {}...".format(IMG_SIZE))
+    resized_images = []
+    for img in all_images:
+        resized = cv2.resize(img, IMG_SIZE)
+        resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
+        resized_images.append(resized)
+    
+    X = np.array(resized_images, dtype=np.float32) / 255.0  # Normalize to [0, 1]
+    y = np.array(all_labels)
+    
+    print(f"Data shape: {X.shape}")
+    print(f"Labels: {set(y)}")
     print()
     
-    # Extract features
-    print("Extracting features from images...")
-    features_list = []
-    for i, img in enumerate(augmented_images):
-        features = extract_features(img)
-        features_list.append(features)
-        if (i + 1) % 10 == 0:
-            print(f"  Processed {i + 1}/{len(augmented_images)} images...")
-    
-    X = np.array(features_list)
-    y = np.array(augmented_labels)
-    
-    print(f"Feature matrix shape: {X.shape}")
+    return X, y
+
+
+def train_model():
+    """Train the currency detection model with heavy training."""
+    print("=" * 70)
+    print("TRAINING CURRENCY DETECTION MODEL (DEEP LEARNING)")
+    print("=" * 70)
     print()
     
-    # Split into training and test sets
-    # Check if we have enough samples for stratified splitting
-    unique_labels = len(set(y))
-    test_size = 0.2
+    # Prepare data
+    X, y = prepare_data()
+    if X is None:
+        return False
     
-    # For stratified split, test set must have at least as many samples as classes
-    # With test_size=0.2, we need at least num_classes / test_size total samples
-    min_samples_for_stratified = int(np.ceil(unique_labels / test_size))
+    # Encode labels
+    label_encoder = LabelEncoder()
+    y_encoded = label_encoder.fit_transform(y)
+    num_classes = len(label_encoder.classes_)
     
-    # Also check that each class has at least 2 samples
-    min_samples_per_class = 2
-    each_class_has_enough = all(np.sum(y == label) >= min_samples_per_class for label in set(y))
+    print(f"Number of classes: {num_classes}")
+    print(f"Classes: {label_encoder.classes_}")
+    print()
     
-    # Check if we can do stratified split
-    can_stratify = len(X) >= min_samples_for_stratified and each_class_has_enough
-    
-    if can_stratify:
-        print("Splitting data into training and test sets (stratified)...")
-        try:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=42, stratify=y
-            )
-            has_test_set = True
-        except ValueError:
-            # Fallback if stratified split still fails
-            print("Stratified split failed, using all data for training...")
-            X_train, X_test, y_train, y_test = X, np.array([]), y, np.array([])
-            has_test_set = False
+    # Split data
+    print("Splitting data into training and validation sets...")
+    if len(X) >= num_classes * 2:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
+        )
+        has_val = True
     else:
-        # For small datasets, use all data for training
-        print("Dataset too small for train/test split. Using all data for training...")
-        X_train, X_test, y_train, y_test = X, np.array([]), y, np.array([])
-        has_test_set = False
+        print("Dataset too small for validation split. Using all data for training...")
+        X_train, X_val, y_train, y_val = X, X, y_encoded, y_encoded
+        has_val = False
     
     print(f"Training samples: {len(X_train)}")
-    if has_test_set:
-        print(f"Test samples: {len(X_test)}")
+    if has_val:
+        print(f"Validation samples: {len(X_val)}")
     print()
     
-    # Scale features
-    print("Scaling features...")
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    if has_test_set:
-        X_test_scaled = scaler.transform(X_test)
+    # Build model
+    print("Building deep learning model with transfer learning (EfficientNetB0)...")
+    model, base_model = build_model(num_classes)
+    print(f"Total parameters: {model.count_params():,}")
     print()
     
-    # Train Random Forest classifier
-    print("Training Random Forest classifier (100 trees)...")
-    clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-    clf.fit(X_train_scaled, y_train)
+    # Create callbacks for heavy training (Stage 1)
+    callbacks_stage1 = [
+        callbacks.EarlyStopping(
+            monitor='val_loss' if has_val else 'loss',
+            patience=10,
+            restore_best_weights=True,
+            verbose=1
+        ),
+        callbacks.ReduceLROnPlateau(
+            monitor='val_loss' if has_val else 'loss',
+            factor=0.5,
+            patience=5,
+            min_lr=1e-7,
+            verbose=1
+        ),
+        callbacks.ModelCheckpoint(
+            'best_model_stage1.weights.h5',
+            monitor='val_accuracy' if has_val else 'accuracy',
+            save_best_only=True,
+            save_weights_only=True,
+            verbose=1
+        )
+    ]
+    
+    # Create callbacks for fine-tuning (Stage 2)
+    callbacks_stage2 = [
+        callbacks.EarlyStopping(
+            monitor='val_loss' if has_val else 'loss',
+            patience=10,
+            restore_best_weights=True,
+            verbose=1
+        ),
+        callbacks.ReduceLROnPlateau(
+            monitor='val_loss' if has_val else 'loss',
+            factor=0.5,
+            patience=5,
+            min_lr=1e-7,
+            verbose=1
+        ),
+        callbacks.ModelCheckpoint(
+            'best_model_stage2.weights.h5',
+            monitor='val_accuracy' if has_val else 'accuracy',
+            save_best_only=True,
+            save_weights_only=True,
+            verbose=1
+        )
+    ]
+    
+    # Create heavy augmentation
+    print("Creating heavy data augmentation generator...")
+    datagen = create_heavy_augmentation()
+    
+    # Stage 1: Train with frozen base model
+    print("=" * 70)
+    print("STAGE 1: Training with frozen base model")
+    print("=" * 70)
     print()
     
-    # Evaluate
-    print("Evaluating model...")
-    train_score = clf.score(X_train_scaled, y_train)
-    print(f"Training Accuracy: {train_score * 100:.2f}%")
-    if has_test_set:
-        test_score = clf.score(X_test_scaled, y_test)
-        print(f"Test Accuracy: {test_score * 100:.2f}%")
-    else:
-        print("(Test set skipped - dataset too small)")
+    history1 = model.fit(
+        datagen.flow(X_train, y_train, batch_size=BATCH_SIZE),
+        steps_per_epoch=len(X_train) // BATCH_SIZE,
+        epochs=EPOCHS // 2,
+        validation_data=(X_val, y_val) if has_val else None,
+        callbacks=callbacks_stage1,
+        verbose=1
+    )
+    
+    # Stage 2: Fine-tune with unfrozen base model
+    print()
+    print("=" * 70)
+    print("STAGE 2: Fine-tuning with unfrozen base model")
+    print("=" * 70)
     print()
     
-    # Create label mappings
-    label_to_idx = {label: idx for idx, label in enumerate(sorted(set(y)))}
-    idx_to_label = {idx: label for label, idx in label_to_idx.items()}
+    # Unfreeze base model layers
+    base_model.trainable = True
+    for layer in base_model.layers[:-30]:  # Freeze early layers
+        layer.trainable = False
     
-    # Save model files
+    # Recompile with lower learning rate
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=LEARNING_RATE / 10),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy', keras.metrics.SparseTopKCategoricalAccuracy(k=3, name='top_3_accuracy')]
+    )
+    
+    history2 = model.fit(
+        datagen.flow(X_train, y_train, batch_size=BATCH_SIZE),
+        steps_per_epoch=len(X_train) // BATCH_SIZE,
+        epochs=EPOCHS // 2,
+        validation_data=(X_val, y_val) if has_val else None,
+        callbacks=callbacks_stage2,
+        verbose=1
+    )
+    
+    # Load best model from stage 2 (final fine-tuned model)
+    if os.path.exists('best_model_stage2.weights.h5'):
+        print("\nLoading best model weights from stage 2...")
+        model.load_weights('best_model_stage2.weights.h5')
+    
+    print()
+    print("=" * 70)
+    print("EVALUATING MODEL PERFORMANCE")
+    print("=" * 70)
+    print()
+    
+    # Evaluate on training set
+    train_loss, train_acc, train_top3 = model.evaluate(X_train, y_train, verbose=0)
+    print(f"Training Accuracy: {train_acc * 100:.2f}%")
+    print(f"Training Top-3 Accuracy: {train_top3 * 100:.2f}%")
+    print()
+    
+    # Evaluate on validation set
+    if has_val:
+        val_loss, val_acc, val_top3 = model.evaluate(X_val, y_val, verbose=0)
+        print(f"Validation Accuracy: {val_acc * 100:.2f}%")
+        print(f"Validation Top-3 Accuracy: {val_top3 * 100:.2f}%")
+        print()
+        
+        # Per-class accuracy
+        y_val_pred = model.predict(X_val, verbose=0)
+        y_val_pred_classes = np.argmax(y_val_pred, axis=1)
+        
+        print("Per-Class Validation Accuracy:")
+        for i, class_name in enumerate(label_encoder.classes_):
+            mask = y_val == i
+            if np.sum(mask) > 0:
+                class_acc = np.mean(y_val_pred_classes[mask] == y_val[mask]) * 100
+                count = np.sum(mask)
+                print(f"  {class_name} som: {class_acc:.2f}% ({count} samples)")
+        print()
+        
+        # Classification report
+        print("Classification Report:")
+        print(classification_report(y_val, y_val_pred_classes, 
+                                   target_names=label_encoder.classes_))
+        print()
+    
+    # Save model
+    print("=" * 70)
     print("Saving model files...")
-    try:
-        joblib.dump(clf, 'currency_model.pkl')
-        joblib.dump(scaler, 'currency_scaler.pkl')
-        joblib.dump({'label_to_idx': label_to_idx, 'idx_to_label': idx_to_label}, 
-                   'currency_mappings.pkl')
-        print("  ✓ currency_model.pkl")
-        print("  ✓ currency_scaler.pkl")
-        print("  ✓ currency_mappings.pkl")
-        print()
-        print("✓ Model saved successfully!")
-        print()
-    except Exception as e:
-        print(f"❌ Error saving model: {e}")
-        return False
+    print("=" * 70)
+    print()
+    
+    # Save Keras model
+    model.save('currency_model.h5')
+    print("  ✓ currency_model.h5")
+    
+    # Save label encoder and mappings
+    mappings = {
+        'label_encoder': label_encoder,
+        'label_to_idx': {label: idx for idx, label in enumerate(label_encoder.classes_)},
+        'idx_to_label': {idx: label for idx, label in enumerate(label_encoder.classes_)}
+    }
+    joblib.dump(mappings, 'currency_mappings.pkl')
+    print("  ✓ currency_mappings.pkl")
+    
+    # Also save as pickle for compatibility (though we'll use .h5)
+    joblib.dump(model, 'currency_model.pkl')
+    joblib.dump(None, 'currency_scaler.pkl')  # Dummy scaler for compatibility
+    print("  ✓ currency_model.pkl (compatibility)")
+    print("  ✓ currency_scaler.pkl (compatibility)")
+    print()
+    
+    # Clean up temporary checkpoint files
+    for checkpoint_file in ['best_model_stage1.weights.h5', 'best_model_stage2.weights.h5']:
+        if os.path.exists(checkpoint_file):
+            os.remove(checkpoint_file)
     
     print("=" * 70)
     print("Training completed successfully!")
     print("=" * 70)
     print()
+    
     return True
 
 
-def find_camera():
-    """Find an available camera."""
-    for i in range(10):
-        cap = cv2.VideoCapture(i)
+def find_camera(preferred_index=None):
+    """Find an available camera, optionally starting from a preferred index."""
+    # If preferred index is specified, try it first
+    if preferred_index is not None:
+        cap = cv2.VideoCapture(preferred_index)
         if cap.isOpened():
             ret, frame = cap.read()
             if ret and frame is not None:
                 cap.release()
-                return i
+                return preferred_index
             cap.release()
+    
+    # Otherwise, search all available cameras
+    available_cameras = []
+    print("  Scanning for cameras...")
+    for i in range(20):  # Increased range to find phone cameras
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                available_cameras.append(i)
+                print(f"    ✓ Camera found at index {i}")
+            cap.release()
+    
+    if available_cameras:
+        # Return the first available camera (or last one if multiple, as phone is usually added last)
+        return available_cameras[-1] if len(available_cameras) > 1 else available_cameras[0]
+    
     return None
 
 
-def load_templates():
-    """Load currency templates for template matching."""
-    templates = {}
-    currencies_dir = "currencies"
-    
-    for denom in DENOMINATIONS:
-        folder_path = os.path.join(currencies_dir, denom)
-        images = load_images_from_folder(folder_path)
-        if images:
-            # Use the first image as template
-            templates[denom] = cv2.cvtColor(images[0], cv2.COLOR_BGR2GRAY)
-    
-    return templates
+def list_cameras():
+    """List all available cameras."""
+    cameras = []
+    print("\nScanning for cameras...")
+    for i in range(20):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                # Try to get camera name/info
+                backend = cap.getBackendName()
+                cameras.append({
+                    'index': i,
+                    'backend': backend,
+                    'resolution': (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 
+                                  int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                })
+                print(f"  Camera {i}: {backend} - Resolution: {cameras[-1]['resolution']}")
+            cap.release()
+    return cameras
 
 
 def non_max_suppression(boxes, scores, overlap_threshold):
@@ -331,7 +462,6 @@ def non_max_suppression(boxes, scores, overlap_threshold):
     boxes = np.array(boxes)
     scores = np.array(scores)
     
-    # Convert boxes to (x1, y1, x2, y2) format
     x1 = boxes[:, 0]
     y1 = boxes[:, 1]
     x2 = boxes[:, 0] + boxes[:, 2]
@@ -360,73 +490,122 @@ def non_max_suppression(boxes, scores, overlap_threshold):
     return keep
 
 
-def detect_currencies(frame, model, scaler, mappings, templates):
-    """Detect currencies using contour-based detection (faster than template matching)."""
+def detect_currencies(frame, model, mappings):
+    """Detect currencies using sliding window approach with batch processing."""
     detections = []
-    
-    # Resize frame for faster processing (keep aspect ratio)
-    scale_factor = 0.5
     h, w = frame.shape[:2]
-    small_frame = cv2.resize(frame, (int(w * scale_factor), int(h * scale_factor)))
-    small_gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
     
-    # Apply Gaussian blur to reduce noise
-    blurred = cv2.GaussianBlur(small_gray, (5, 5), 0)
-    
-    # Use adaptive threshold to find currency-like regions
-    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                   cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # Find contours
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Process each contour
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        # Scale area back to original frame size
-        scaled_area = area / (scale_factor * scale_factor)
+    # First, try the entire frame (fastest and most accurate if currency fills frame)
+    try:
+        frame_resized = cv2.resize(frame, IMG_SIZE)
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        frame_normalized = frame_rgb.astype(np.float32) / 255.0
+        frame_batch = np.expand_dims(frame_normalized, axis=0)
         
-        # Filter by area
-        if MIN_DETECTION_AREA <= scaled_area <= MAX_DETECTION_AREA:
-            # Get bounding box
-            x, y, w, h = cv2.boundingRect(contour)
-            
-            # Scale coordinates back to original frame
-            x = int(x / scale_factor)
-            y = int(y / scale_factor)
-            w = int(w / scale_factor)
-            h = int(h / scale_factor)
-            
-            # Make sure we're within frame bounds
-            x = max(0, min(x, frame.shape[1] - 1))
-            y = max(0, min(y, frame.shape[0] - 1))
-            w = min(w, frame.shape[1] - x)
-            h = min(h, frame.shape[0] - y)
-            
-            if w < 50 or h < 50:  # Skip too small regions
-                continue
-            
-            # Extract region of interest
-            roi = frame[y:y+h, x:x+w]
-            if roi.size == 0 or roi.shape[0] < 20 or roi.shape[1] < 20:
-                continue
-            
-            # Extract features and classify
-            try:
-                features = extract_features(roi)
-                features_scaled = scaler.transform([features])
-                prediction = model.predict(features_scaled)[0]
-                confidence = model.predict_proba(features_scaled)[0].max()
+        prediction = model.predict(frame_batch, verbose=0)[0]
+        predicted_class_idx = np.argmax(prediction)
+        confidence = prediction[predicted_class_idx]
+        
+        if confidence >= MIN_CONFIDENCE:
+            predicted_label = mappings['idx_to_label'][predicted_class_idx]
+            detections.append({
+                'box': (0, 0, w, h),
+                'denomination': predicted_label,
+                'confidence': confidence,
+                'distance': "Full Frame",
+                'center': (w // 2, h // 2)
+            })
+            # If full frame detection is confident enough, return it
+            if confidence >= 0.7:
+                return detections
+    except Exception:
+        pass
+    
+    # Define window sizes (adjusted for better coverage)
+    window_sizes = [
+        (int(w * 0.6), int(h * 0.3)),   # Large window
+        (int(w * 0.4), int(h * 0.2)),   # Medium window
+        (int(w * 0.3), int(h * 0.15)),  # Small window
+    ]
+    
+    # Ensure minimum window sizes
+    window_sizes = [(max(w_size, 100), max(h_size, 50)) for w_size, h_size in window_sizes]
+    
+    step_size = 60  # Smaller step for better coverage
+    
+    # Collect all ROIs and their metadata for batch processing
+    rois_data = []
+    
+    # Process each window size
+    for win_w, win_h in window_sizes:
+        for y in range(0, h - win_h + 1, step_size):
+            for x in range(0, w - win_w + 1, step_size):
+                roi = frame[y:y+win_h, x:x+win_w]
                 
-                # Only keep high-confidence detections
-                if confidence > 0.6:
-                    detections.append({
-                        'box': (x, y, w, h),
-                        'denomination': prediction,
-                        'confidence': confidence
+                if roi.size == 0:
+                    continue
+                
+                try:
+                    # Preprocess ROI
+                    roi_resized = cv2.resize(roi, IMG_SIZE)
+                    roi_rgb = cv2.cvtColor(roi_resized, cv2.COLOR_BGR2RGB)
+                    roi_normalized = roi_rgb.astype(np.float32) / 255.0
+                    
+                    rois_data.append({
+                        'roi': roi_normalized,
+                        'box': (x, y, win_w, win_h),
+                        'win_w': win_w
                     })
-            except Exception:
-                continue
+                except Exception:
+                    continue
+    
+    # Batch process all ROIs at once (much faster than individual predictions)
+    if rois_data:
+        try:
+            batch = np.array([data['roi'] for data in rois_data])
+            predictions_batch = model.predict(batch, verbose=0, batch_size=32)
+            
+            # Track max confidence for debugging
+            max_conf = 0.0
+            
+            # Process predictions
+            for i, pred in enumerate(predictions_batch):
+                predicted_class_idx = np.argmax(pred)
+                confidence = pred[predicted_class_idx]
+                max_conf = max(max_conf, confidence)
+                
+                if confidence >= MIN_CONFIDENCE:
+                    predicted_label = mappings['idx_to_label'][predicted_class_idx]
+                    data = rois_data[i]
+                    x, y, win_w, win_h = data['box']
+                    
+                    # Estimate distance based on window size relative to frame
+                    win_ratio = data['win_w'] / w
+                    if win_ratio >= 0.5:
+                        distance_category = "Close"
+                    elif win_ratio >= 0.3:
+                        distance_category = "Medium"
+                    else:
+                        distance_category = "Far"
+                    
+                    detections.append({
+                        'box': (x, y, win_w, win_h),
+                        'denomination': predicted_label,
+                        'confidence': confidence,
+                        'distance': distance_category,
+                        'center': (x + win_w // 2, y + win_h // 2)
+                    })
+            
+            # Debug: Print max confidence if no detections (only occasionally to avoid spam)
+            if len(detections) == 0 and len(rois_data) > 0:
+                import random
+                if random.random() < 0.1:  # 10% chance to print
+                    print(f"Debug: No detections. Max confidence: {max_conf:.3f}, Threshold: {MIN_CONFIDENCE}, ROIs checked: {len(rois_data)}")
+        except Exception as e:
+            print(f"Batch prediction error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     # Apply non-maximum suppression
     if detections:
@@ -445,16 +624,16 @@ def run_detection():
     print("=" * 70)
     print()
     
-    # Load model files
-    if not os.path.exists('currency_model.pkl'):
-        print("❌ Error: Model files not found!")
+    # Load model
+    model_path = 'currency_model.h5'
+    if not os.path.exists(model_path):
+        print("❌ Error: Model file not found!")
         print("   Please train the model first.")
         return
     
     print("Loading trained model...")
     try:
-        model = joblib.load('currency_model.pkl')
-        scaler = joblib.load('currency_scaler.pkl')
+        model = keras.models.load_model(model_path)
         mappings = joblib.load('currency_mappings.pkl')
         print("✓ Model loaded successfully")
         print()
@@ -462,20 +641,46 @@ def run_detection():
         print(f"❌ Error loading model: {e}")
         return
     
-    # Load templates
-    templates = load_templates()
-    if not templates:
-        print("❌ Error: No templates found in currencies/ folder!")
-        return
+    # Check for camera index from environment variable or command line
+    import sys
+    camera_idx = None
     
-    print(f"Loaded {len(templates)} template(s)")
-    print()
+    # Check command line argument
+    if len(sys.argv) > 1:
+        try:
+            camera_idx = int(sys.argv[1])
+            print(f"Using camera index from command line: {camera_idx}")
+        except ValueError:
+            print(f"⚠ Invalid camera index: {sys.argv[1]}. Searching automatically...")
+    
+    # Check environment variable
+    if camera_idx is None:
+        env_camera = os.environ.get('CAMERA_INDEX')
+        if env_camera:
+            try:
+                camera_idx = int(env_camera)
+                print(f"Using camera index from environment: {camera_idx}")
+            except ValueError:
+                print(f"⚠ Invalid camera index in environment: {env_camera}")
     
     # Find camera
     print("Searching for camera...")
-    camera_idx = find_camera()
+    if camera_idx is None:
+        # List all cameras first
+        cameras = list_cameras()
+        if len(cameras) > 1:
+            print(f"\n  Found {len(cameras)} camera(s). Using the last one (usually your phone).")
+            print(f"  To use a specific camera, run: python main.py <camera_index>")
+            print(f"  Or set environment variable: export CAMERA_INDEX=<camera_index>")
+        camera_idx = find_camera()
+    
     if camera_idx is None:
         print("❌ Error: No camera found!")
+        print("\nTroubleshooting:")
+        print("  1. Make sure your phone is connected via USB")
+        print("  2. Enable USB debugging/File transfer mode on your phone")
+        print("  3. Install a webcam app on your phone (DroidCam, iVCam, etc.)")
+        print("  4. Try: python main.py <camera_index> to specify camera manually")
         return
     
     print(f"✓ Camera found at index {camera_idx}")
@@ -487,7 +692,6 @@ def run_detection():
         print("❌ Error: Could not open camera!")
         return
     
-    # Set camera properties (lower resolution for better performance)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 30)
@@ -504,73 +708,124 @@ def run_detection():
     
     paused = False
     frame_count = 0
-    detections = []  # Store detections between frames
+    detections = []
+    latest_frame = None
     
     # Color mapping for denominations
     colors = {
-        '20': (0, 255, 0),    # Green
-        '50': (255, 0, 0),    # Blue
-        '100': (0, 0, 255),   # Red
-        '500': (255, 255, 0), # Cyan
-        '1000': (255, 0, 255), # Magenta
-        '5000': (0, 255, 255)  # Yellow
+        '20': (0, 255, 0),      # Green
+        '50': (255, 0, 0),      # Blue
+        '100': (0, 0, 255),     # Red
+        '200': (255, 128, 0),   # Orange
+        '500': (255, 255, 0),   # Cyan
+        '1000': (255, 0, 255),  # Magenta
+        '5000': (0, 255, 255)   # Yellow
     }
     
+    # Clear camera buffer to reduce lag
+    for _ in range(5):
+        cap.read()
+    
     try:
+        detection_in_progress = False
         while True:
+            # Always read frames to keep camera feed fresh
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to read from camera")
+                break
+            
+            # Always update display frame immediately for smooth feed
             if not paused:
-                ret, frame = cap.read()
-                if not ret:
-                    print("Failed to read from camera")
-                    break
-                
+                latest_frame = frame.copy()
                 frame_count += 1
                 
-                # Detect currencies every 3 frames for better responsiveness
-                # (contour-based detection is faster than template matching)
-                if frame_count % 3 == 0:
-                    detections = detect_currencies(frame, model, scaler, mappings, templates)
-                # Keep previous detections for smoother display between detection frames
+                # Detect currencies every 8 frames (balance between smoothness and responsiveness)
+                # Only start new detection if previous one finished
+                if frame_count % 8 == 0 and not detection_in_progress:
+                    detection_in_progress = True
+                    try:
+                        detections = detect_currencies(latest_frame, model, mappings)
+                    except Exception as e:
+                        print(f"Detection error: {e}")
+                        detections = []
+                    finally:
+                        detection_in_progress = False
+            else:
+                # When paused, still update display
+                if latest_frame is None:
+                    latest_frame = frame.copy()
             
-            # Draw detections on frame
-            display_frame = frame.copy()
-            total_sum = 0
-            item_count = 0
+            # Use latest frame or current frame for display
+            display_frame = latest_frame.copy() if latest_frame is not None else frame.copy()
+            detected_count = 0
             
             for det in detections:
                 x, y, w, h = det['box']
                 denom = det['denomination']
                 conf = det['confidence']
+                distance = det.get('distance', 'Unknown')
+                center_x, center_y = det.get('center', (x + w // 2, y + h // 2))
                 
                 # Draw bounding box
                 color = colors.get(denom, (255, 255, 255))
                 cv2.rectangle(display_frame, (x, y), (x + w, y + h), color, 2)
                 
+                # Draw center point
+                cv2.circle(display_frame, (center_x, center_y), 5, color, -1)
+                
                 # Draw label
                 label = f"{denom} som ({conf:.2f})"
-                label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                cv2.rectangle(display_frame, (x, y - label_size[1] - 10), 
-                            (x + label_size[0], y), color, -1)
-                cv2.putText(display_frame, label, (x, y - 5),
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                distance_text = f"Dist: {distance}"
                 
-                total_sum += int(denom)
-                item_count += 1
+                label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                dist_size, _ = cv2.getTextSize(distance_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                
+                box_height = label_size[1] + dist_size[1] + 15
+                box_width = max(label_size[0], dist_size[0]) + 10
+                cv2.rectangle(display_frame, (x, y - box_height), 
+                            (x + box_width, y), color, -1)
+                
+                y_offset = y - 5
+                cv2.putText(display_frame, label, (x + 5, y_offset),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                y_offset -= dist_size[1] + 5
+                cv2.putText(display_frame, distance_text, (x + 5, y_offset),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+                
+                detected_count += 1
             
-            # Draw total sum and count
-            info_text = f"Total: {total_sum} som | Items: {item_count}"
-            cv2.rectangle(display_frame, (10, 10), (400, 50), (0, 0, 0), -1)
+            # Draw detection count and status
+            info_text = f"Detected: {detected_count} currency note(s)"
+            status_color = (0, 255, 0) if detected_count > 0 else (255, 255, 255)
+            cv2.rectangle(display_frame, (10, 10), (380, 85), (0, 0, 0), -1)
             cv2.putText(display_frame, info_text, (15, 35),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+            
+            # Show detection status
+            if detection_in_progress:
+                status_text = "Detecting..."
+                cv2.putText(display_frame, status_text, (15, 60),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            else:
+                status_text = "Ready"
+                cv2.putText(display_frame, status_text, (15, 60),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             
             if paused:
                 pause_text = "PAUSED"
-                cv2.putText(display_frame, pause_text, (15, 70),
+                cv2.putText(display_frame, pause_text, (15, 80),
                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             
             cv2.imshow('Currency Detection', display_frame)
             
+            # Use waitKey with small delay to allow display to update
             key = cv2.waitKey(1) & 0xFF
+            
+            # Clear camera buffer periodically to prevent lag buildup
+            if frame_count % 30 == 0:
+                for _ in range(3):
+                    cap.read()
             if key == ord('q'):
                 break
             elif key == ord('s'):
@@ -601,7 +856,7 @@ def main():
     remove_old_models()
     
     # Step 2: Train model
-    print("Step 2: Training model from currencies/ folder...")
+    print("Step 2: Training deep learning model from currencies/ folder...")
     if not train_model():
         print("Training failed. Exiting.")
         return
@@ -620,4 +875,3 @@ if __name__ == "__main__":
         print(f"\n❌ Unexpected error: {e}")
         import traceback
         traceback.print_exc()
-
