@@ -15,6 +15,7 @@ import cv2
 # Configuration
 MODEL_ID = "main-fddlv/2"  # Model ID from Roboflow dashboard
 SAMPLE_FOLDER = "sample"
+RESULT_FOLDER = "sample_result"
 
 # Make sure ROBOFLOW_API_KEY is set in environment
 # export ROBOFLOW_API_KEY=OR7LrKLkb5DbaRn95f5X
@@ -88,7 +89,6 @@ def process_image(image_path: str, model):
             print(f"         Position: x={x:.1f}, y={y:.1f}, w={w:.1f}, h={h:.1f}")
             print(f"         Detection ID: {detection_id}")
         
-        # Convert to dict for summary (or return the object)
         return results
         
     except Exception as e:
@@ -96,6 +96,88 @@ def process_image(image_path: str, model):
         import traceback
         traceback.print_exc()
         return None
+
+
+def draw_detections(image, results):
+    """
+    Draw detections on image with bounding boxes, labels, and confidence.
+    
+    Args:
+        image: OpenCV image array
+        results: Roboflow inference results object
+    
+    Returns:
+        Annotated image
+    """
+    output_image = image.copy()
+    
+    # Get predictions from results
+    predictions = results.predictions if hasattr(results, 'predictions') else []
+    
+    if not predictions:
+        return output_image
+    
+    # Color mapping - based on DISPLAY names (after swap)
+    colors = {
+        '20': (0, 0, 255),      # Red for 20 (display)
+        '100': (0, 255, 0),     # Green for 100 (display)
+    }
+    color_names = {
+        '20': 'Red',
+        '100': 'Green',
+    }
+    
+    img_height, img_width = output_image.shape[:2]
+    
+    for i, pred in enumerate(predictions, 1):
+        # Get original class from Roboflow
+        roboflow_class = pred.class_name if hasattr(pred, 'class_name') else (pred.class_ if hasattr(pred, 'class_') else 'Unknown')
+        # Apply swap mapping for display
+        class_name = map_class_name(roboflow_class)
+        confidence = pred.confidence if hasattr(pred, 'confidence') else 0.0
+        
+        # Get bounding box coordinates
+        x = int(pred.x - pred.width / 2) if hasattr(pred, 'x') and hasattr(pred, 'width') else 0
+        y = int(pred.y - pred.height / 2) if hasattr(pred, 'y') and hasattr(pred, 'height') else 0
+        w = int(pred.width) if hasattr(pred, 'width') else 0
+        h = int(pred.height) if hasattr(pred, 'height') else 0
+        
+        # Ensure coordinates are within image bounds
+        x = max(0, min(x, img_width - 1))
+        y = max(0, min(y, img_height - 1))
+        w = min(w, img_width - x)
+        h = min(h, img_height - y)
+        
+        color = colors.get(class_name, (255, 255, 255))
+        color_name = color_names.get(class_name, 'White')
+        
+        # Draw bounding box
+        cv2.rectangle(output_image, (x, y), (x + w, y + h), color, 4)
+        
+        # Draw label with class name, color name, and confidence
+        label = f"{i}. {class_name} ({color_name}) - {confidence:.1%}"
+        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        
+        # Label background
+        cv2.rectangle(output_image, (x, y - label_size[1] - 20), 
+                     (x + label_size[0] + 15, y), color, -1)
+        
+        # Label text
+        cv2.putText(output_image, label, (x + 8, y - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        
+        # Draw corner markers for better visibility
+        corner_size = 15
+        cv2.line(output_image, (x, y), (x + corner_size, y), color, 3)
+        cv2.line(output_image, (x, y), (x, y + corner_size), color, 3)
+        cv2.line(output_image, (x + w, y), (x + w - corner_size, y), color, 3)
+        cv2.line(output_image, (x + w, y), (x + w, y + corner_size), color, 3)
+        cv2.line(output_image, (x, y + h), (x + corner_size, y + h), color, 3)
+        cv2.line(output_image, (x, y + h), (x, y + h - corner_size), color, 3)
+        cv2.line(output_image, (x + w, y + h), (x + w - corner_size, y + h), color, 3)
+        cv2.line(output_image, (x + w, y + h), (x + w, y + h - corner_size), color, 3)
+    
+    return output_image
 
 
 def main():
@@ -117,6 +199,11 @@ def main():
     if not os.path.exists(SAMPLE_FOLDER):
         print(f"❌ Error: '{SAMPLE_FOLDER}' folder not found!")
         sys.exit(1)
+    
+    # Create result folder if it doesn't exist
+    if not os.path.exists(RESULT_FOLDER):
+        os.makedirs(RESULT_FOLDER)
+        print(f"📁 Created output folder: {RESULT_FOLDER}")
     
     # Find all image files in sample folder
     image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG']
@@ -156,6 +243,21 @@ def main():
     for img_path in test_images:
         results = process_image(img_path, model)
         all_results[img_path] = results
+        
+        # Draw detections and save annotated image
+        if results:
+            # Load image again for annotation
+            image = cv2.imread(img_path)
+            if image is not None:
+                annotated_image = draw_detections(image, results)
+                
+                # Save annotated image
+                img_filename = os.path.basename(img_path)
+                img_name, img_ext = os.path.splitext(img_filename)
+                output_filename = f"{img_name}_result{img_ext}"
+                output_path = os.path.join(RESULT_FOLDER, output_filename)
+                cv2.imwrite(output_path, annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                print(f"  📸 Annotated image saved: {output_path}")
     
     # Summary
     print("\n" + "=" * 70)
@@ -177,6 +279,8 @@ def main():
                 print(f"  {img_filename}: No detections")
         else:
             print(f"  {img_filename}: Failed to process")
+    print("=" * 70)
+    print(f"\n✅ All annotated images saved to '{RESULT_FOLDER}' folder")
     print("=" * 70)
 
 
