@@ -1,0 +1,1 @@
+source .venv/bin/activate && export ROBOFLOW_API_KEY=OR7LrKLkb5DbaRn95f5X && python3 main_test.py
